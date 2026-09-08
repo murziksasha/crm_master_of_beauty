@@ -23,6 +23,55 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 export class StaffController {
   constructor(private staffService: StaffService) {}
 
+  @Get('shift-swaps')
+  listSwaps(
+    @CurrentUser() user?: { role: Role; staffProfileId?: string | null },
+  ) {
+    const staffId = user?.role === Role.MASTER ? user.staffProfileId || undefined : undefined;
+    return this.staffService.listSwaps(staffId);
+  }
+
+  @Post('shift-swaps')
+  @Roles(Role.OWNER, Role.ADMIN, Role.MASTER)
+  requestSwap(
+    @Body()
+    body: { peerId: string; dateFrom: string; dateTo: string; note?: string; requesterId?: string },
+    @CurrentUser() user?: { role: Role; staffProfileId?: string | null; id: string },
+  ) {
+    const requesterId =
+      user?.role === Role.MASTER ? user.staffProfileId : body.requesterId;
+    if (!requesterId) throw new ForbiddenException('Профіль майстра не привʼязано');
+    return this.staffService.requestSwap({
+      requesterId,
+      peerId: body.peerId,
+      dateFrom: body.dateFrom,
+      dateTo: body.dateTo,
+      note: body.note,
+    });
+  }
+
+  @Post('shift-swaps/:id/peer-accept')
+  @Roles(Role.OWNER, Role.ADMIN, Role.MASTER)
+  peerAccept(
+    @Param('id') id: string,
+    @CurrentUser() user?: { staffProfileId?: string | null },
+  ) {
+    if (!user?.staffProfileId) throw new ForbiddenException('Профіль майстра не привʼязано');
+    return this.staffService.peerAcceptSwap(id, user.staffProfileId);
+  }
+
+  @Post('shift-swaps/:id/approve')
+  @Roles(Role.OWNER, Role.ADMIN)
+  approve(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.staffService.decideSwap(id, true, userId);
+  }
+
+  @Post('shift-swaps/:id/reject')
+  @Roles(Role.OWNER, Role.ADMIN)
+  reject(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.staffService.decideSwap(id, false, userId);
+  }
+
   @Get()
   async list(
     @Query('branchId') branchId?: string,

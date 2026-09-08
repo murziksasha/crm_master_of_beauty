@@ -65,6 +65,7 @@ export class InventoryService {
         branchId: dto.branchId,
         categoryId: dto.categoryId,
         sku: dto.sku,
+        barcode: dto.barcode,
         brand: dto.brand,
         unit: dto.unit || 'шт',
         stockQty: dto.stockQty ?? 0,
@@ -135,5 +136,109 @@ export class InventoryService {
     const p = await this.prisma.product.findFirst({ where: { id, deletedAt: null } });
     if (!p) throw new NotFoundException('Товар не знайдено');
     return p;
+  }
+
+  async findByBarcode(code: string) {
+    const barcode = code.trim();
+    if (!barcode) throw new BadRequestException('Вкажіть штрихкод');
+    const product = await this.prisma.product.findFirst({
+      where: {
+        deletedAt: null,
+        OR: [
+          { barcode },
+          { sku: barcode },
+        ],
+      },
+      include: { category: true },
+    });
+    if (!product) throw new NotFoundException('Товар за штрихкодом не знайдено');
+    return product;
+  }
+
+  listSuppliers() {
+    return this.prisma.supplier.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+      include: { _count: { select: { invoices: true } } },
+    });
+  }
+
+  createSupplier(dto: { name: string; phone?: string; email?: string; notes?: string }) {
+    return this.prisma.supplier.create({ data: dto });
+  }
+
+  listInvoices(branchId?: string | null) {
+    return this.prisma.supplierInvoice.findMany({
+      where: branchId ? { branchId } : undefined,
+      include: {
+        supplier: true,
+        lines: { include: { product: { select: { name: true, sku: true } } } },
+      },
+      orderBy: { receivedAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  async createInvoice(
+    dto: {
+      supplierId: string;
+      number: string;
+      branchId?: string;
+      receivedAt?: string;
+      notes?: string;
+      lines?: { productId: string; qty: number; costPrice: number }[];
+    },
+    userId: string,
+  ) {
+    const lines = dto.lines || [];
+    const total = lines.reduce((s, l) => s + Number(l.qty) * Number(l.costPrice), 0);
+    return this.prisma.$transaction(async (tx) => {
+      const invoice = await tx.supplierInvoice.create({
+        data: {
+          supplierId: dto.supplierId,
+          number: dto.number,
+          branchId: dto.branchId,
+          receivedAt: dto.receivedAt ? new Date(dto.receivedAt) : new Date(),
+          notes: dto.notes,
+          total,
+          lines: {
+            create: lines.map((l) => ({
+              productId: l.productId,
+              qty: l.qty,
+              costPrice: l.costPrice,
+            })),
+          },
+        },
+        include: { supplier: true, lines: true },
+      });
+      for (const line of lines) {
+        await tx.product.update({
+          where: { id: line.productId },
+          data: {
+            stockQty: { increment: line.qty },
+            costPrice: line.costPrice,
+          },
+        });
+        await tx.stockMovement.create({
+          data: {
+            productId: line.productId,
+            type: StockMovementType.IN,
+            qty: line.qty,
+            reason: `Накладна ${dto.number}`,
+            userId,
+          },
+        });
+      }
+      return invoice;
+    });
+  }
+
+  async markInvoicePaid(id: string) {
+    const inv = await this.prisma.supplierInvoice.findUnique({ where: { id } });
+    if (!inv) throw new NotFoundException('Накладну не знайдено');
+    return this.prisma.supplierInvoice.update({
+      where: { id },
+      data: { status: 'PAID' },
+    });
   }
 }

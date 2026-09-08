@@ -17,6 +17,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RealtimeService.name);
   private readonly local$ = new Subject<RealtimeEvent>();
   private sub: Redis | null = null;
+  private pub: Redis | null = null;
   private readonly channel = 'mob:events';
 
   constructor(private config: ConfigService) {}
@@ -41,7 +42,9 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
           /* ignore bad payload */
         }
       });
-      this.logger.log('Realtime Redis subscriber ready');
+      this.pub = this.sub.duplicate();
+      await this.pub.connect();
+      this.logger.log('Realtime Redis subscriber + publisher ready');
     } catch (e) {
       this.logger.warn(`Realtime Redis sub unavailable: ${e instanceof Error ? e.message : e}`);
       try {
@@ -54,6 +57,11 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    try {
+      await this.pub?.quit();
+    } catch {
+      /* ignore */
+    }
     try {
       await this.sub?.quit();
     } catch {
@@ -73,11 +81,8 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
 
   private async publishRedis(event: RealtimeEvent) {
     try {
-      if (!this.sub) return;
-      // ioredis subscriber connection cannot publish — use duplicate
-      const pub = this.sub.duplicate();
-      await pub.publish(this.channel, JSON.stringify(event));
-      pub.disconnect();
+      if (!this.pub) return;
+      await this.pub.publish(this.channel, JSON.stringify(event));
     } catch {
       /* ignore */
     }

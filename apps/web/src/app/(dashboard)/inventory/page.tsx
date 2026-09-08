@@ -17,17 +17,37 @@ export default function InventoryPage() {
   const [form, setForm] = useState({
     name: '',
     brand: '',
+    sku: '',
+    barcode: '',
     salePrice: 0,
     costPrice: 0,
     stockQty: 0,
     minStock: 0,
     unit: 'шт',
   });
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoice, setInvoice] = useState({
+    supplierId: '',
+    number: '',
+    productId: '',
+    qty: 1,
+    costPrice: 0,
+    newSupplier: '',
+  });
   const [moveForm, setMoveForm] = useState({ type: 'IN', qty: 1, reason: '' });
 
   const { data: products, isLoading } = useQuery({
     queryKey: ['products', branchId],
     queryFn: () => api<any[]>('/inventory/products'),
+    enabled: !!branchId,
+  });
+  const { data: suppliers } = useQuery({
+    queryKey: ['suppliers'],
+    queryFn: () => api<any[]>('/inventory/suppliers'),
+  });
+  const { data: invoices } = useQuery({
+    queryKey: ['invoices', branchId],
+    queryFn: () => api<any[]>('/inventory/invoices'),
     enabled: !!branchId,
   });
 
@@ -68,15 +88,55 @@ export default function InventoryPage() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const createInvoice = useMutation({
+    mutationFn: async () => {
+      let supplierId = invoice.supplierId;
+      if (!supplierId && invoice.newSupplier) {
+        const s = await api<any>('/inventory/suppliers', {
+          method: 'POST',
+          body: JSON.stringify({ name: invoice.newSupplier }),
+        });
+        supplierId = s.id;
+      }
+      if (!supplierId || !invoice.productId) throw new Error('Постачальник і товар обовʼязкові');
+      return api('/inventory/invoices', {
+        method: 'POST',
+        body: JSON.stringify({
+          supplierId,
+          number: invoice.number,
+          lines: [
+            {
+              productId: invoice.productId,
+              qty: Number(invoice.qty),
+              costPrice: Number(invoice.costPrice),
+            },
+          ],
+        }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      qc.invalidateQueries({ queryKey: ['suppliers'] });
+      setInvoiceOpen(false);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   return (
     <div>
       <PageHeader
         title="Склад"
         subtitle={branch ? `${branch.name} · залишки` : 'Косметика, фарби, матеріали'}
         actions={
-          <button className="btn btn-primary" onClick={() => setOpen(true)}>
-            <Plus size={16} /> Товар
-          </button>
+          <>
+            <button className="btn btn-secondary" onClick={() => setInvoiceOpen(true)}>
+              Прибуткова накладна
+            </button>
+            <button className="btn btn-primary" onClick={() => setOpen(true)}>
+              <Plus size={16} /> Товар
+            </button>
+          </>
         }
       />
 
@@ -88,6 +148,7 @@ export default function InventoryPage() {
             <thead>
               <tr>
                 <th>Назва</th>
+                <th>SKU / штрихкод</th>
                 <th>Бренд</th>
                 <th>Залишок</th>
                 <th>Мін.</th>
@@ -101,6 +162,7 @@ export default function InventoryPage() {
                 return (
                   <tr key={p.id}>
                     <td className="font-medium">{p.name}</td>
+                    <td className="font-mono text-xs">{p.sku || p.barcode || '—'}</td>
                     <td>{p.brand || '—'}</td>
                     <td>
                       <span className={low ? 'font-semibold text-rose' : ''}>
@@ -152,6 +214,22 @@ export default function InventoryPage() {
               onChange={(e) => setForm({ ...form, brand: e.target.value })}
             />
           </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="SKU">
+              <input
+                className="input font-mono"
+                value={form.sku}
+                onChange={(e) => setForm({ ...form, sku: e.target.value })}
+              />
+            </Field>
+            <Field label="Штрихкод">
+              <input
+                className="input font-mono"
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+              />
+            </Field>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Ціна продажу">
               <input
@@ -230,6 +308,87 @@ export default function InventoryPage() {
           <ErrorText error={error} />
           <button className="btn btn-primary w-full">Підтвердити</button>
         </form>
+      </Modal>
+
+      <Modal open={invoiceOpen} onClose={() => setInvoiceOpen(false)} title="Прибуткова накладна">
+        <div className="space-y-3">
+          <Field label="Постачальник">
+            <select
+              className="input"
+              value={invoice.supplierId}
+              onChange={(e) => setInvoice({ ...invoice, supplierId: e.target.value })}
+            >
+              <option value="">Новий / оберіть</option>
+              {suppliers?.map((s: any) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {!invoice.supplierId ? (
+            <Field label="Новий постачальник">
+              <input
+                className="input"
+                value={invoice.newSupplier}
+                onChange={(e) => setInvoice({ ...invoice, newSupplier: e.target.value })}
+              />
+            </Field>
+          ) : null}
+          <Field label="Номер накладної">
+            <input
+              className="input"
+              required
+              value={invoice.number}
+              onChange={(e) => setInvoice({ ...invoice, number: e.target.value })}
+            />
+          </Field>
+          <Field label="Товар">
+            <select
+              className="input"
+              value={invoice.productId}
+              onChange={(e) => setInvoice({ ...invoice, productId: e.target.value })}
+            >
+              <option value="">Оберіть...</option>
+              {products?.map((p: any) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="К-сть">
+              <input
+                className="input"
+                type="number"
+                value={invoice.qty}
+                onChange={(e) => setInvoice({ ...invoice, qty: Number(e.target.value) })}
+              />
+            </Field>
+            <Field label="Закупівля ₴">
+              <input
+                className="input"
+                type="number"
+                value={invoice.costPrice}
+                onChange={(e) => setInvoice({ ...invoice, costPrice: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+          {invoices?.length ? (
+            <p className="text-xs text-ink-muted">
+              Останні: {invoices.slice(0, 3).map((i: any) => `${i.number} (${i.supplier?.name})`).join(' · ')}
+            </p>
+          ) : null}
+          <ErrorText error={error} />
+          <button
+            className="btn btn-primary w-full"
+            disabled={createInvoice.isPending}
+            onClick={() => createInvoice.mutate()}
+          >
+            Оприбуткувати
+          </button>
+        </div>
       </Modal>
     </div>
   );

@@ -64,7 +64,31 @@ export class AppointmentsController {
       if (!user.staffProfileId) throw new ForbiddenException('Профіль майстра не привʼязано');
       query.staffId = user.staffProfileId;
     }
+    if (!query.staffId || query.staffId === 'any') {
+      return this.appointmentsService.getAnyStaffSlots({
+        date: query.date,
+        serviceIds: query.serviceIds || '',
+        branchId: query.branchId,
+      });
+    }
     return this.appointmentsService.getSlots(query);
+  }
+
+  @Get('availability')
+  availability(
+    @Query('from') from: string,
+    @Query('serviceIds') serviceIds: string,
+    @Query('staffId') staffId?: string,
+    @Query('days') days?: string,
+    @Headers('x-branch-id') branchHeader?: string,
+  ) {
+    return this.appointmentsService.getAvailability({
+      from,
+      serviceIds: serviceIds || '',
+      staffId,
+      days: Number(days) || 14,
+      branchId: branchHeader,
+    });
   }
 
   @Get('suggest')

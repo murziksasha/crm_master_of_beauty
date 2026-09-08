@@ -23,6 +23,7 @@ import {
   SlotsQueryDto,
   UpdateAppointmentDto,
 } from './dto/appointment.dto';
+import { roomLockKey, staffLockKey } from '../../common/utils/advisory-lock';
 
 const TZ = process.env.SALON_TZ || 'Europe/Kyiv';
 const ACTIVE_STATUSES: AppointmentStatus[] = [
@@ -120,6 +121,9 @@ export class AppointmentsService {
 
     const appointment = await this.prisma.$transaction(async (tx) => {
       await this.lockStaffSchedule(tx, dto.staffId);
+      if (dto.roomId) {
+        await this.lockRoomSchedule(tx, dto.roomId);
+      }
       await this.assertNoConflictTx(tx, dto.staffId, startAt, endAt);
       if (dto.roomId) {
         await this.assertRoomFreeTx(tx, dto.roomId, startAt, endAt);
@@ -233,6 +237,9 @@ export class AppointmentsService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await this.lockStaffSchedule(tx, staffId);
+      if (roomId) {
+        await this.lockRoomSchedule(tx, roomId);
+      }
       await this.assertNoConflictTx(tx, staffId, startAt, endAt, id);
       if (roomId) {
         await this.assertRoomFreeTx(tx, roomId, startAt, endAt, id);
@@ -438,7 +445,20 @@ export class AppointmentsService {
     serviceIds: string[];
     date?: string;
     branchId?: string;
-  }) {
+  }): Promise<{
+    date: string;
+    preferredStaffId: string | null;
+    suggestions: {
+      staffId: string;
+      displayName: string;
+      color: string;
+      preferred: boolean;
+      slotsCount: number;
+      nextSlots: string[];
+      durationMin: number;
+    }[];
+    upsell: { serviceId: string; name: string; score: number }[];
+  }> {
     const serviceIds = params.serviceIds.filter(Boolean);
     if (!serviceIds.length) throw new BadRequestException('Оберіть послуги');
 
@@ -540,7 +560,11 @@ export class AppointmentsService {
       .slice(0, 5);
   }
 
-  async getSlots(query: SlotsQueryDto) {
+  async getSlots(query: SlotsQueryDto): Promise<{
+    slots: string[];
+    durationMin: number;
+    step?: number;
+  }> {
     const salon = await this.prisma.salon.findFirst();
     const step = salon?.slotStepMin || 15;
     let durationMin = Number(query.durationMin) || 60;
@@ -553,6 +577,12 @@ export class AppointmentsService {
       }
     }
 
+    if (!query.staffId) {
+      return this.getAnyStaffSlots({
+        date: query.date,
+        serviceIds: query.serviceIds || '',
+      });
+    }
     const staff = await this.prisma.staffProfile.findUnique({
       where: { id: query.staffId },
       include: { schedules: true, timeOffs: true },
@@ -609,6 +639,126 @@ export class AppointmentsService {
     return { slots, durationMin, step };
   }
 
+  async getAnyStaffSlots(params: {
+    date: string;
+    serviceIds: string;
+    branchId?: string;
+  }): Promise<{
+    slots: string[];
+    options: { at: string; staffId: string; displayName: string; color?: string }[];
+    durationMin: number;
+    staff: {
+      staffId: string;
+      displayName: string;
+      color?: string;
+      slotsCount: number;
+      preferred: boolean;
+    }[];
+  }> {
+    const ids = (params.serviceIds || '').split(',').filter(Boolean);
+    const ranked = await this.suggest({
+      serviceIds: ids,
+      date: params.date,
+      branchId: params.branchId,
+    });
+
+    const full = await Promise.all(
+      ranked.suggestions.map(async (s) => {
+        const slots = await this.getSlots({
+          staffId: s.staffId,
+          date: params.date,
+          serviceIds: params.serviceIds,
+        });
+        return { ...s, slots: slots.slots, durationMin: slots.durationMin };
+      }),
+    );
+
+    const union = new Map<
+      string,
+      { at: string; staffId: string; displayName: string; color?: string }
+    >();
+    for (const s of full) {
+      for (const at of s.slots) {
+        if (!union.has(at)) {
+          union.set(at, {
+            at,
+            staffId: s.staffId,
+            displayName: s.displayName,
+            color: s.color,
+          });
+        }
+      }
+    }
+    const options = Array.from(union.values()).sort((a, b) => a.at.localeCompare(b.at));
+    return {
+      slots: options.map((o) => o.at),
+      options,
+      durationMin: full[0]?.durationMin || ranked.suggestions[0]?.durationMin || 60,
+      staff: full.map((s) => ({
+        staffId: s.staffId,
+        displayName: s.displayName,
+        color: s.color,
+        slotsCount: s.slots.length,
+        preferred: s.preferred,
+      })),
+    };
+  }
+
+  async pickStaffForSlot(params: {
+    startAt: string;
+    serviceIds: string[];
+    branchId?: string;
+    preferredStaffId?: string;
+  }) {
+    const date = params.startAt.slice(0, 10);
+    const any = await this.getAnyStaffSlots({
+      date,
+      serviceIds: params.serviceIds.join(','),
+      branchId: params.branchId,
+    });
+    const match =
+      any.options.find(
+        (o) =>
+          o.at === params.startAt &&
+          (!params.preferredStaffId || o.staffId === params.preferredStaffId),
+      ) || any.options.find((o) => o.at === params.startAt);
+    if (!match) {
+      throw new BadRequestException('Немає вільного майстра на цей час');
+    }
+    return match;
+  }
+
+  async getAvailability(params: {
+    from: string;
+    days?: number;
+    serviceIds: string;
+    staffId?: string;
+    branchId?: string;
+  }) {
+    const days = Math.min(Math.max(Number(params.days) || 14, 1), 31);
+    const start = parseISO(params.from);
+    const out: { date: string; slotsCount: number; full: boolean }[] = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const result =
+        !params.staffId || params.staffId === 'any'
+          ? await this.getAnyStaffSlots({
+              date: dateStr,
+              serviceIds: params.serviceIds,
+              branchId: params.branchId,
+            })
+          : await this.getSlots({
+              staffId: params.staffId,
+              date: dateStr,
+              serviceIds: params.serviceIds,
+            });
+      const slotsCount = result.slots.length;
+      out.push({ date: dateStr, slotsCount, full: slotsCount === 0 });
+    }
+    return { days: out };
+  }
+
   private timeOnDate(day: Date, hhmm: string) {
     const [h, m] = hhmm.split(':').map(Number);
     return setMinutes(setHours(startOfDay(day), h), m);
@@ -630,7 +780,16 @@ export class AppointmentsService {
     staffId: string,
   ) {
     // Transaction-scoped advisory lock prevents double-booking races
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${staffId}))`;
+    const key = staffLockKey(staffId);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  }
+
+  private async lockRoomSchedule(
+    tx: Prisma.TransactionClient,
+    roomId: string,
+  ) {
+    const key = roomLockKey(roomId);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
   }
 
   private async assertNoConflictTx(

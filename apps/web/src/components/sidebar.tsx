@@ -23,6 +23,7 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { canAccess } from '@/lib/roles';
 import { cn, roleLabels } from '@/lib/utils';
+import { useTheme } from '@/lib/theme-context';
 
 const nav = [
   { href: '/dashboard', label: 'Дашборд', icon: LayoutDashboard },
@@ -48,6 +49,7 @@ type SidebarProps = {
 export function Sidebar({ open = true, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const { mode, setMode } = useTheme();
   const items = nav.filter((item) => canAccess(user?.role, item.href));
 
   return (
@@ -62,7 +64,7 @@ export function Sidebar({ open = true, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-border bg-white transition-transform duration-200 lg:static lg:z-0 lg:w-64 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-border bg-card transition-transform duration-200 lg:static lg:z-0 lg:w-64 lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -113,6 +115,16 @@ export function Sidebar({ open = true, onClose }: SidebarProps) {
               {user ? roleLabels[user.role] || user.role : ''}
             </div>
           </div>
+          <select
+            className="input mb-2 py-1.5 text-xs"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'system')}
+            aria-label="Тема"
+          >
+            <option value="system">Тема: система</option>
+            <option value="light">Тема: світла</option>
+            <option value="dark">Тема: темна</option>
+          </select>
           <button className="btn btn-ghost w-full justify-start" onClick={logout}>
             <LogOut size={16} />
             Вийти

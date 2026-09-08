@@ -19,12 +19,24 @@ export class JobsController {
 
   @Post('run-daily')
   async runDaily() {
-    const [staff, birthdays, lowStock] = await Promise.all([
+    const [staff, birthdays, lowStock, winback, reviews] = await Promise.all([
       this.jobs.sendStaffMorningDigests(),
       this.jobs.sendBirthdayGreetings(),
       this.jobs.sendLowStockAlert(),
+      this.jobs.sendWinbackCampaigns(),
+      this.jobs.sendReviewPolls(),
     ]);
-    return { ok: true, staff, birthdays, lowStock };
+    return { ok: true, staff, birthdays, lowStock, winback, reviews };
+  }
+
+  @Post('run-winback')
+  runWinback() {
+    return this.jobs.sendWinbackCampaigns();
+  }
+
+  @Post('run-reviews')
+  runReviews() {
+    return this.jobs.sendReviewPolls();
   }
 
   @Post('run-birthdays')

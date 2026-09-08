@@ -29,6 +29,9 @@ export default function AppointmentsPage() {
   const { branchId } = useBranch();
   const qc = useQueryClient();
   const [view, setView] = useState<'timeline' | 'day' | 'week'>('timeline');
+  const [calendarMode, setCalendarMode] = useState<'staff' | 'room'>('staff');
+  const [specFilter, setSpecFilter] = useState('');
+  const [staffSearch, setStaffSearch] = useState('');
   const [day, setDay] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [open, setOpen] = useState(false);
   const [payOpen, setPayOpen] = useState<any | null>(null);
@@ -581,15 +584,62 @@ export default function AppointmentsPage() {
         </div>
       ) : null}
 
+      {view === 'timeline' && !masterMode ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <button
+            className={`rounded-lg px-3 py-1.5 text-sm ${calendarMode === 'staff' ? 'bg-rose-soft text-rose-dark' : 'bg-cream text-ink-muted'}`}
+            onClick={() => setCalendarMode('staff')}
+          >
+            Майстри
+          </button>
+          <button
+            className={`rounded-lg px-3 py-1.5 text-sm ${calendarMode === 'room' ? 'bg-rose-soft text-rose-dark' : 'bg-cream text-ink-muted'}`}
+            onClick={() => setCalendarMode('room')}
+          >
+            Кабінети
+          </button>
+          <input
+            className="input max-w-[12rem] py-1.5 text-sm"
+            placeholder="Пошук майстра"
+            value={staffSearch}
+            onChange={(e) => setStaffSearch(e.target.value)}
+          />
+          {Array.from(
+            new Set((staff || []).flatMap((s: any) => s.specializations || [])),
+          ).map((spec: any) => (
+            <button
+              key={spec}
+              className={`rounded-full px-3 py-1 text-xs ${
+                specFilter === spec ? 'bg-rose text-white' : 'bg-cream-dark text-ink-muted'
+              }`}
+              onClick={() => setSpecFilter(specFilter === spec ? '' : spec)}
+            >
+              {spec}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {isLoading ? (
         <LoadingBlock />
       ) : view === 'timeline' ? (
         <ResourceDayCalendar
           day={day}
-          staff={(staff || []).filter((s: any) => !masterMode || s.id === user?.staffProfileId)}
+          viewMode={calendarMode}
+          rooms={rooms || []}
+          staff={(staff || []).filter((s: any) => {
+            if (masterMode && s.id !== user?.staffProfileId) return false;
+            if (staffSearch && !s.displayName.toLowerCase().includes(staffSearch.toLowerCase())) {
+              return false;
+            }
+            if (specFilter && !(s.specializations || []).includes(specFilter)) return false;
+            return true;
+          })}
           appointments={appointments || []}
           readOnly={false}
-          onReschedule={(id, startAt, staffId) => reschedule.mutate({ id, startAt, staffId })}
+          onReschedule={(id, startAt, staffId, extra) =>
+            reschedule.mutate({ id, startAt, staffId, roomId: extra?.roomId })
+          }
           onResize={(id, endAt) => reschedule.mutate({ id, endAt })}
           renderActions={(a) => renderActions(a)}
         />

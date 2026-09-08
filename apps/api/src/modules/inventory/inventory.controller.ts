@@ -5,6 +5,8 @@ import { InventoryService } from './inventory.service';
 import {
   CreateProductCategoryDto,
   CreateProductDto,
+  CreateSupplierDto,
+  CreateSupplierInvoiceDto,
   StockMoveDto,
   UpdateProductDto,
 } from './dto/inventory.dto';
@@ -26,6 +28,46 @@ export class InventoryController {
   @Roles(Role.OWNER, Role.ADMIN)
   createCategory(@Body() dto: CreateProductCategoryDto) {
     return this.inventoryService.createCategory(dto);
+  }
+
+  @Get('products/barcode/:code')
+  findByBarcode(@Param('code') code: string) {
+    return this.inventoryService.findByBarcode(code);
+  }
+
+  @Get('suppliers')
+  listSuppliers() {
+    return this.inventoryService.listSuppliers();
+  }
+
+  @Post('suppliers')
+  @Roles(Role.OWNER, Role.ADMIN)
+  createSupplier(@Body() dto: CreateSupplierDto) {
+    return this.inventoryService.createSupplier(dto);
+  }
+
+  @Get('invoices')
+  listInvoices(@Headers('x-branch-id') branchHeader?: string) {
+    return this.inventoryService.listInvoices(branchHeader);
+  }
+
+  @Post('invoices')
+  @Roles(Role.OWNER, Role.ADMIN, Role.RECEPTION)
+  createInvoice(
+    @Body() dto: CreateSupplierInvoiceDto,
+    @CurrentUser('id') userId: string,
+    @Headers('x-branch-id') branchHeader?: string,
+  ) {
+    return this.inventoryService.createInvoice(
+      { ...dto, branchId: dto.branchId || branchHeader },
+      userId,
+    );
+  }
+
+  @Post('invoices/:id/paid')
+  @Roles(Role.OWNER, Role.ADMIN)
+  markPaid(@Param('id') id: string) {
+    return this.inventoryService.markInvoicePaid(id);
   }
 
   @Get('products')

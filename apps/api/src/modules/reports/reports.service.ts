@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { AppointmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  calcStaffCommission,
+  parseCommissionTiers,
+} from '../../common/utils/commission-tiers';
 
 @Injectable()
 export class ReportsService {
@@ -210,8 +214,22 @@ export class ReportsService {
       row.productRevenue += productRev;
       row.revenue += Number(sale.total);
       row.salesCount += 1;
-      row.commission += (serviceRev * (staff.commissionPct || 0)) / 100;
       map.set(staff.id, row);
+    }
+
+    for (const row of map.values()) {
+      const staff = sales.find((s) => s.appointment?.staff?.id === row.staffId)?.appointment
+        ?.staff;
+      const tiers = parseCommissionTiers(staff?.commissionTiers);
+      const calc = calcStaffCommission({
+        serviceRevenue: row.serviceRevenue,
+        productRevenue: row.productRevenue,
+        servicePct: staff?.commissionPct || row.commissionPct || 0,
+        productPct: staff?.productCommissionPct ?? 10,
+        tiers,
+      });
+      row.commissionPct = calc.servicePct;
+      row.commission = calc.commission;
     }
 
     const items = Array.from(map.values())

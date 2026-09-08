@@ -43,19 +43,11 @@ export class PaymentsController {
     return this.paymentsService.getByOrderId(orderId);
   }
 
-  /** Staff: mock-pay deposit (dev / sandbox) */
+  /** Staff: mock-pay deposit (local/test only — never public) */
   @ApiBearerAuth()
   @Post('mock-deposit')
   @Roles(Role.OWNER, Role.ADMIN, Role.RECEPTION)
   mockDepositStaff(@Body() body: { appointmentId: string }) {
-    if (!body?.appointmentId) return { ok: false };
-    return this.paymentsService.mockDepositPay(body.appointmentId);
-  }
-
-  /** Public: mock-pay deposit after online booking */
-  @Public()
-  @Post('mock-deposit/public')
-  mockDepositPublic(@Body() body: { appointmentId: string }) {
     if (!body?.appointmentId) return { ok: false };
     return this.paymentsService.mockDepositPay(body.appointmentId);
   }

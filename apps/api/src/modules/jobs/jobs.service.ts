@@ -1,10 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { AppointmentStatus } from '@prisma/client';
+import { AppointmentStatus, LoyaltyTxType } from '@prisma/client';
 import { addHours, subHours, format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TelegramService } from '../telegram/telegram.service';
 
 const TZ = process.env.SALON_TZ || 'Europe/Kyiv';
 
@@ -17,6 +18,7 @@ export class JobsService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private telegram: TelegramService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -101,6 +103,8 @@ export class JobsService {
         });
       }
 
+      await this.sendReviewPolls();
+
       if (for24h.length || for2h.length) {
         this.logger.log(`Reminders sent: 24h=${for24h.length}, 2h=${for2h.length}`);
       }
@@ -130,6 +134,7 @@ export class JobsService {
         this.sendStaffMorningDigests(),
         this.sendBirthdayGreetings(),
         this.sendLowStockAlert(),
+        this.sendWinbackCampaigns(),
       ]);
     } catch (e) {
       this.logger.error(`Daily ops job failed: ${e instanceof Error ? e.message : e}`);
@@ -191,6 +196,9 @@ export class JobsService {
         `Доброго ранку, ${staff.displayName}! Сьогодні ${list.length} записів:\n` +
         lines.join('\n');
 
+      if (staff.telegramChatId) {
+        await this.telegram.sendMessage(staff.telegramChatId, body);
+      }
       if (phone) {
         await this.notifications.send({
           channel: 'sms',
@@ -230,10 +238,43 @@ export class JobsService {
       LIMIT 100
     `;
 
+    const salon = await this.prisma.salon.findFirst();
+    const bonus = salon?.birthdayBonusPoints ?? 150;
+    const year = now.getFullYear();
+
     for (const c of clients) {
+      const full = await this.prisma.client.findUnique({
+        where: { id: c.id },
+        include: { loyalty: true },
+      });
+      if (full && full.birthdayBonusYear !== year && bonus > 0) {
+        let account = full.loyalty;
+        if (!account) {
+          account = await this.prisma.loyaltyAccount.create({ data: { clientId: c.id } });
+        }
+        await this.prisma.loyaltyAccount.update({
+          where: { id: account.id },
+          data: { pointsBalance: { increment: bonus } },
+        });
+        await this.prisma.loyaltyTransaction.create({
+          data: {
+            accountId: account.id,
+            type: LoyaltyTxType.ADJUST,
+            points: bonus,
+            note: 'Бонус до дня народження',
+          },
+        });
+        await this.prisma.client.update({
+          where: { id: c.id },
+          data: { birthdayBonusYear: year },
+        });
+      }
       const body =
         `${c.firstName}, вітаємо з Днем народження від Master of Beauty! ` +
-        `З любовʼю чекаємо вас у салоні 💖`;
+        `Нараховано ${bonus} бонусів 💖`;
+      if (full?.telegramChatId) {
+        await this.telegram.sendMessage(full.telegramChatId, body);
+      }
       if (c.phone) {
         await this.notifications.send({
           channel: 'sms',
@@ -298,5 +339,104 @@ export class JobsService {
     }
     this.logger.log(`Low-stock alerts: ${low.length} products, ${targets.size} emails`);
     return { count: low.length };
+  }
+
+  async sendWinbackCampaigns() {
+    const salon = await this.prisma.salon.findFirst();
+    if (salon && salon.winbackEnabled === false) return { sent: 0 };
+    const windows = [45, 60, 90];
+    let sent = 0;
+    for (const days of windows) {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      const older = new Date();
+      older.setDate(older.getDate() - (days + 5));
+      const clients = await this.prisma.client.findMany({
+        where: {
+          deletedAt: null,
+          isActive: true,
+          OR: [{ lastWinbackAt: null }, { lastWinbackAt: { lt: older } }],
+          appointments: {
+            some: { status: { in: [AppointmentStatus.COMPLETED, AppointmentStatus.CONFIRMED] } },
+            none: {
+              startAt: { gte: since },
+              status: { notIn: ['CANCELLED'] },
+            },
+          },
+        },
+        take: 30,
+      });
+      for (const c of clients) {
+        const code = `WB${days}-${c.id.slice(-4).toUpperCase()}${Date.now().toString(36).slice(-3)}`.toUpperCase();
+        await this.prisma.marketingVoucher.create({
+          data: {
+            clientId: c.id,
+            type: `WINBACK_${days}`,
+            code,
+            discountPct: 10,
+            expiresAt: new Date(Date.now() + 21 * 86400000),
+            channel: c.telegramChatId ? 'telegram' : 'sms',
+          },
+        });
+        const body =
+          `${c.firstName}, нам вас не вистачає! Промокод ${code} на −10% ` +
+          `дійсний 21 день. Master of Beauty чекає 💛`;
+        if (c.telegramChatId) {
+          await this.telegram.sendMessage(c.telegramChatId, body);
+        } else if (c.phone) {
+          await this.notifications.send({
+            channel: 'sms',
+            to: c.phone,
+            body,
+            meta: { type: 'winback', days, clientId: c.id },
+          });
+        }
+        await this.prisma.client.update({
+          where: { id: c.id },
+          data: { lastWinbackAt: new Date() },
+        });
+        sent += 1;
+      }
+    }
+    this.logger.log(`Win-back vouchers: ${sent}`);
+    return { sent };
+  }
+
+  async sendReviewPolls() {
+    const since = new Date(Date.now() - 3 * 3600_000);
+    const until = new Date(Date.now() - 2 * 3600_000);
+    const appts = await this.prisma.appointment.findMany({
+      where: {
+        status: AppointmentStatus.COMPLETED,
+        reviewSentAt: null,
+        endAt: { gte: since, lte: until },
+      },
+      include: { client: true, staff: true },
+      take: 40,
+    });
+    for (const a of appts) {
+      const maps =
+        process.env.GOOGLE_MAPS_REVIEW_URL ||
+        'https://search.google.com/local/writereview';
+      const body =
+        `${a.client.firstName}, як минув візит до ${a.staff.displayName}? ` +
+        `Оцініть від 1 до 10 у кабінеті, або залиште відгук: ${maps}`;
+      if (a.client.telegramChatId) {
+        await this.telegram.sendMessage(a.client.telegramChatId, body);
+      } else if (a.client.phone) {
+        await this.notifications.send({
+          channel: 'sms',
+          to: a.client.phone,
+          body,
+          meta: { type: 'review', appointmentId: a.id },
+        });
+      }
+      await this.prisma.appointment.update({
+        where: { id: a.id },
+        data: { reviewSentAt: new Date() },
+      });
+    }
+    if (appts.length) this.logger.log(`Review polls: ${appts.length}`);
+    return { sent: appts.length };
   }
 }

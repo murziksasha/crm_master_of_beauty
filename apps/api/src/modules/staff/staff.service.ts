@@ -92,6 +92,8 @@ export class StaffService {
             bio: dto.bio,
             color: dto.color || '#C4A484',
             commissionPct: dto.commissionPct ?? 0,
+            productCommissionPct: dto.productCommissionPct ?? 10,
+            commissionTiers: dto.commissionTiers as never,
             specializations: dto.specializations || [],
             isBookable: dto.isBookable ?? true,
             schedules: {
@@ -136,6 +138,8 @@ export class StaffService {
           bio: dto.bio,
           color: dto.color,
           commissionPct: dto.commissionPct,
+          productCommissionPct: dto.productCommissionPct,
+          commissionTiers: dto.commissionTiers as never,
           specializations: dto.specializations,
           isBookable: dto.isBookable,
         },
@@ -184,5 +188,72 @@ export class StaffService {
   async removeTimeOff(staffId: string, timeOffId: string) {
     await this.findOne(staffId);
     return this.prisma.timeOff.delete({ where: { id: timeOffId } });
+  }
+
+  listSwaps(staffId?: string) {
+    return this.prisma.shiftSwap.findMany({
+      where: staffId
+        ? { OR: [{ requesterId: staffId }, { peerId: staffId }] }
+        : undefined,
+      include: {
+        requester: { select: { id: true, displayName: true, color: true } },
+        peer: { select: { id: true, displayName: true, color: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  async requestSwap(dto: {
+    requesterId: string;
+    peerId: string;
+    dateFrom: string;
+    dateTo: string;
+    note?: string;
+  }) {
+    if (dto.requesterId === dto.peerId) {
+      throw new ConflictException('Не можна мінятись із собою');
+    }
+    await this.findOne(dto.requesterId);
+    await this.findOne(dto.peerId);
+    return this.prisma.shiftSwap.create({
+      data: {
+        requesterId: dto.requesterId,
+        peerId: dto.peerId,
+        dateFrom: new Date(dto.dateFrom),
+        dateTo: new Date(dto.dateTo),
+        note: dto.note,
+      },
+      include: {
+        requester: { select: { displayName: true } },
+        peer: { select: { displayName: true } },
+      },
+    });
+  }
+
+  async peerAcceptSwap(id: string, staffId: string) {
+    const swap = await this.prisma.shiftSwap.findUnique({ where: { id } });
+    if (!swap) throw new NotFoundException('Запит не знайдено');
+    if (swap.peerId !== staffId) throw new ConflictException('Це не ваш запит на обмін');
+    if (swap.status !== 'PENDING') throw new ConflictException('Запит уже оброблено');
+    return this.prisma.shiftSwap.update({
+      where: { id },
+      data: { status: 'PEER_ACCEPTED' },
+    });
+  }
+
+  async decideSwap(id: string, approve: boolean, userId: string) {
+    const swap = await this.prisma.shiftSwap.findUnique({ where: { id } });
+    if (!swap) throw new NotFoundException('Запит не знайдено');
+    if (swap.status === 'APPROVED' || swap.status === 'REJECTED') {
+      throw new ConflictException('Запит уже закрито');
+    }
+    return this.prisma.shiftSwap.update({
+      where: { id },
+      data: {
+        status: approve ? 'APPROVED' : 'REJECTED',
+        approvedById: userId,
+      },
+    });
   }
 }

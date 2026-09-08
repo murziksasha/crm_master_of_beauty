@@ -28,6 +28,13 @@ export default function SettingsPage() {
     depositEnabled: false,
     depositRequired: false,
     depositPercent: 30,
+    checkboxEnabled: false,
+    checkboxLicenseKey: '',
+    checkboxPinCode: '',
+    telegramEnabled: false,
+    telegramBotToken: '',
+    birthdayBonusPoints: 150,
+    winbackEnabled: true,
   });
   const [branchForm, setBranchForm] = useState({ name: '', address: '', phone: '' });
   const [roomForm, setRoomForm] = useState({ name: '', capacity: 1, color: '#A78BFA' });
@@ -74,6 +81,13 @@ export default function SettingsPage() {
         depositEnabled: data.depositEnabled ?? false,
         depositRequired: data.depositRequired ?? false,
         depositPercent: data.depositPercent ?? 30,
+        checkboxEnabled: data.checkboxEnabled ?? false,
+        checkboxLicenseKey: '',
+        checkboxPinCode: '',
+        telegramEnabled: data.telegramEnabled ?? false,
+        telegramBotToken: '',
+        birthdayBonusPoints: data.birthdayBonusPoints ?? 150,
+        winbackEnabled: data.winbackEnabled ?? true,
       });
     }
   }, [data]);
@@ -316,6 +330,71 @@ export default function SettingsPage() {
               onChange={(e) => setForm({ ...form, liqpaySandbox: e.target.checked })}
             />
             Sandbox
+          </label>
+        </div>
+
+        <h2 className="pt-4 font-semibold">ПРРО Checkbox</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={form.checkboxEnabled}
+            onChange={(e) => setForm({ ...form, checkboxEnabled: e.target.checked })}
+          />
+          Checkbox увімкнено
+        </label>
+        <Field label="License key">
+          <input
+            className="input"
+            value={form.checkboxLicenseKey}
+            onChange={(e) => setForm({ ...form, checkboxLicenseKey: e.target.value })}
+            placeholder={data?.hasCheckboxLicense ? '•••• збережено' : ''}
+          />
+        </Field>
+        <Field label="PIN касира">
+          <input
+            className="input"
+            type="password"
+            value={form.checkboxPinCode}
+            onChange={(e) => setForm({ ...form, checkboxPinCode: e.target.value })}
+          />
+        </Field>
+
+        <h2 className="pt-4 font-semibold">Telegram і маркетинг</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={form.telegramEnabled}
+            onChange={(e) => setForm({ ...form, telegramEnabled: e.target.checked })}
+          />
+          Telegram-бот увімкнено
+        </label>
+        <Field label="Bot token">
+          <input
+            className="input"
+            type="password"
+            value={form.telegramBotToken}
+            onChange={(e) => setForm({ ...form, telegramBotToken: e.target.value })}
+            placeholder={data?.hasTelegramBot ? '•••• збережено' : ''}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Бонус до ДН (бали)">
+            <input
+              className="input"
+              type="number"
+              value={form.birthdayBonusPoints}
+              onChange={(e) =>
+                setForm({ ...form, birthdayBonusPoints: Number(e.target.value) })
+              }
+            />
+          </Field>
+          <label className="flex items-center gap-2 pt-6 text-sm">
+            <input
+              type="checkbox"
+              checked={form.winbackEnabled}
+              onChange={(e) => setForm({ ...form, winbackEnabled: e.target.checked })}
+            />
+            Win-back кампанії
           </label>
         </div>
 

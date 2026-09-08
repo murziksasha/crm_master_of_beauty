@@ -112,6 +112,31 @@ enum CashShiftStatus {
   CLOSED
 }
 
+enum ShiftSwapStatus {
+  PENDING
+  PEER_ACCEPTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum FiscalReceiptType {
+  SELL
+  RETURN
+}
+
+enum FiscalReceiptStatus {
+  PENDING
+  DONE
+  ERROR
+}
+
+enum SupplierInvoiceStatus {
+  OPEN
+  PAID
+  VOID
+}
+
 enum AuditAction {
   CREATE
   UPDATE
@@ -153,6 +178,13 @@ model Salon {
   liqpaySandbox      Boolean     @default(true)
   liqpayEnabled      Boolean     @default(false)
   publicBaseUrl      String?     // e.g. https://salon.ua for LiqPay result_url
+  checkboxEnabled    Boolean     @default(false)
+  checkboxLicenseKey String?
+  checkboxPinCode    String?
+  telegramBotToken   String?
+  telegramEnabled    Boolean     @default(false)
+  birthdayBonusPoints Int        @default(150)
+  winbackEnabled     Boolean     @default(true)
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
   branches           Branch[]
@@ -180,6 +212,7 @@ model Branch {
   onlinePays    OnlinePayment[]
   cashShifts    CashShift[]
   rooms         Room[]
+  supplierInvoices SupplierInvoice[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
@@ -223,6 +256,7 @@ model User {
   cashShifts     CashShift[]     @relation("ShiftCashier")
   closedShifts   CashShift[]     @relation("ShiftCloser")
   closedPayrolls PayrollPeriod[] @relation("PayrollCloser")
+  approvedSwaps  ShiftSwap[]     @relation("SwapApprover")
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 }
@@ -306,19 +340,24 @@ model StaffProfile {
   displayName     String
   bio             String?
   color           String           @default("#C4A484")
-  photoUrl        String?
-  commissionPct   Float            @default(0)
-  specializations String[]
-  isBookable      Boolean          @default(true)
-  sortOrder       Int              @default(0)
-  schedules       WorkSchedule[]
-  timeOffs        TimeOff[]
-  services        StaffService[]
-  appointments    Appointment[]
-  waitlist        WaitlistEntry[]
-  series          RecurringSeries[]
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  photoUrl              String?
+  commissionPct         Float            @default(0)
+  productCommissionPct  Float            @default(10)
+  commissionTiers       Json?
+  telegramChatId        String?
+  specializations       String[]
+  isBookable            Boolean          @default(true)
+  sortOrder             Int              @default(0)
+  schedules             WorkSchedule[]
+  timeOffs              TimeOff[]
+  services              StaffService[]
+  appointments          Appointment[]
+  waitlist              WaitlistEntry[]
+  series                RecurringSeries[]
+  swapsRequested        ShiftSwap[]      @relation("SwapRequester")
+  swapsPeer             ShiftSwap[]      @relation("SwapPeer")
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
   @@index([branchId])
 }
@@ -436,10 +475,15 @@ model Client {
   waitlist     WaitlistEntry[]
   series       RecurringSeries[]
   onlinePays   OnlinePayment[]
-  portalOtps   ClientPortalOtp[]
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  deletedAt    DateTime?
+  portalOtps         ClientPortalOtp[]
+  telegramChatId     String?
+  telegramOptIn      Boolean           @default(false)
+  lastWinbackAt      DateTime?
+  birthdayBonusYear  Int?
+  vouchers           MarketingVoucher[]
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  deletedAt          DateTime?
 
   @@index([phone])
   @@index([lastName, firstName])
@@ -453,6 +497,7 @@ model ClientPortalOtp {
   codeHash  String
   expiresAt DateTime
   usedAt    DateTime?
+  attempts  Int       @default(0)
   createdAt DateTime  @default(now())
 
   @@index([clientId])
@@ -518,6 +563,8 @@ model Appointment {
   reminder24hSentAt  DateTime?
   reminder2hSentAt   DateTime?
   checkedInAt        DateTime?
+  reviewSentAt       DateTime?
+  npsScore           Int?
   services           AppointmentService[]
   sale               Sale?
   onlinePay          OnlinePayment?
@@ -591,6 +638,7 @@ model CashShift {
   closedById      String?
   closedBy        User?           @relation("ShiftCloser", fields: [closedById], references: [id])
   sales           Sale[]
+  fiscalShiftId   String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
@@ -614,22 +662,29 @@ model Sale {
   cashShift        CashShift?    @relation(fields: [cashShiftId], references: [id])
   subtotal         Decimal       @db.Decimal(12, 2)
   discountAmount   Decimal       @default(0) @db.Decimal(12, 2)
-  loyaltyRedeem    Decimal       @default(0) @db.Decimal(12, 2)
-  total            Decimal       @db.Decimal(12, 2)
-  method           PaymentMethod @default(CASH)
-  cashAmount       Decimal?      @db.Decimal(12, 2)
-  cardAmount       Decimal?      @db.Decimal(12, 2)
-  notes            String?
-  status           SaleStatus    @default(PAID)
-  refundedAt       DateTime?
-  refundReason     String?
-  refundedById     String?
-  refundedBy       User?         @relation("RefundedSales", fields: [refundedById], references: [id])
-  paidAt           DateTime      @default(now())
-  items            SaleItem[]
-  loyaltyTx        LoyaltyTransaction[]
-  onlinePay        OnlinePayment?
-  createdAt        DateTime      @default(now())
+  loyaltyRedeem           Decimal       @default(0) @db.Decimal(12, 2)
+  giftRedeem              Decimal       @default(0) @db.Decimal(12, 2)
+  giftCertificateId       String?
+  giftCertificate         GiftCertificate? @relation(fields: [giftCertificateId], references: [id])
+  packageId               String?
+  clientPackage           ClientPackage? @relation(fields: [packageId], references: [id])
+  packageSessionsBurned   Int           @default(0)
+  total                   Decimal       @db.Decimal(12, 2)
+  method                  PaymentMethod @default(CASH)
+  cashAmount              Decimal?      @db.Decimal(12, 2)
+  cardAmount              Decimal?      @db.Decimal(12, 2)
+  notes                   String?
+  status                  SaleStatus    @default(PAID)
+  refundedAt              DateTime?
+  refundReason            String?
+  refundedById            String?
+  refundedBy              User?         @relation("RefundedSales", fields: [refundedById], references: [id])
+  paidAt                  DateTime      @default(now())
+  items                   SaleItem[]
+  loyaltyTx               LoyaltyTransaction[]
+  onlinePay               OnlinePayment?
+  fiscalReceipts          FiscalReceipt[]
+  createdAt               DateTime      @default(now())
 
   @@index([paidAt])
   @@index([clientId])
@@ -695,6 +750,7 @@ model Product {
   category    ProductCategory? @relation(fields: [categoryId], references: [id])
   name        String
   sku         String?         @unique
+  barcode     String?
   brand       String?
   unit        String          @default("шт")
   stockQty    Decimal         @default(0) @db.Decimal(12, 3)
@@ -704,6 +760,7 @@ model Product {
   isActive    Boolean         @default(true)
   movements   StockMovement[]
   materials   ServiceMaterial[]
+  invoiceLines SupplierInvoiceLine[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
   deletedAt   DateTime?
@@ -711,6 +768,7 @@ model Product {
   @@index([name])
   @@index([isActive])
   @@index([branchId])
+  @@index([barcode])
 }
 
 model StockMovement {
@@ -779,6 +837,7 @@ model ClientPackage {
   pricePaid     Decimal         @db.Decimal(12, 2)
   status        PackageStatus   @default(ACTIVE)
   expiresAt     DateTime?
+  sales         Sale[]
   createdAt     DateTime        @default(now())
 
   @@index([clientId])
@@ -793,6 +852,7 @@ model GiftCertificate {
   owner     Client?   @relation("GiftOwner", fields: [ownerId], references: [id])
   expiresAt DateTime?
   isActive  Boolean   @default(true)
+  sales     Sale[]
   createdAt DateTime  @default(now())
 }
 
@@ -807,4 +867,105 @@ model SmsLog {
 
   @@index([createdAt])
   @@index([to])
+}
+
+model FiscalReceipt {
+  id          String              @id @default(cuid())
+  saleId      String?
+  sale        Sale?               @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  type        FiscalReceiptType   @default(SELL)
+  status      FiscalReceiptStatus @default(PENDING)
+  fiscalCode  String?
+  taxUrl      String?
+  qrUrl       String?
+  shiftId     String?
+  raw         Json?
+  error       String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([saleId])
+  @@index([status])
+}
+
+model Supplier {
+  id        String            @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  notes     String?
+  isActive  Boolean           @default(true)
+  invoices  SupplierInvoice[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+}
+
+model SupplierInvoice {
+  id          String               @id @default(cuid())
+  supplierId  String
+  supplier    Supplier             @relation(fields: [supplierId], references: [id])
+  branchId    String?
+  branch      Branch?              @relation(fields: [branchId], references: [id])
+  number      String
+  receivedAt  DateTime             @default(now())
+  total       Decimal              @default(0) @db.Decimal(12, 2)
+  status      SupplierInvoiceStatus @default(OPEN)
+  notes       String?
+  lines       SupplierInvoiceLine[]
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@index([supplierId])
+  @@index([branchId])
+  @@index([receivedAt])
+}
+
+model SupplierInvoiceLine {
+  id        String          @id @default(cuid())
+  invoiceId String
+  invoice   SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product         @relation(fields: [productId], references: [id])
+  qty       Decimal         @db.Decimal(12, 3)
+  costPrice Decimal         @db.Decimal(12, 2)
+
+  @@index([invoiceId])
+  @@index([productId])
+}
+
+model ShiftSwap {
+  id           String          @id @default(cuid())
+  requesterId  String
+  requester    StaffProfile    @relation("SwapRequester", fields: [requesterId], references: [id])
+  peerId       String
+  peer         StaffProfile    @relation("SwapPeer", fields: [peerId], references: [id])
+  dateFrom     DateTime
+  dateTo       DateTime
+  status       ShiftSwapStatus @default(PENDING)
+  note         String?
+  approvedById String?
+  approvedBy   User?           @relation("SwapApprover", fields: [approvedById], references: [id])
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([requesterId])
+  @@index([peerId])
+  @@index([status])
+}
+
+model MarketingVoucher {
+  id          String    @id @default(cuid())
+  clientId    String
+  client      Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  type        String
+  code        String    @unique
+  discountPct Int       @default(10)
+  sentAt      DateTime  @default(now())
+  redeemedAt  DateTime?
+  expiresAt   DateTime?
+  channel     String    @default("sms")
+  createdAt   DateTime  @default(now())
+
+  @@index([clientId])
+  @@index([type])
 }

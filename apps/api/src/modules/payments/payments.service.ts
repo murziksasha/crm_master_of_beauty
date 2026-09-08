@@ -9,6 +9,11 @@ import { AppointmentStatus, OnlinePaymentStatus, PaymentMethod } from '@prisma/c
 import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BranchesService } from '../branches/branches.service';
+import {
+  decideLiqPayCallback,
+  isMockDepositAllowed as mockDepositAllowed,
+  LiqPayCallbackPayload,
+} from '../../common/utils/liqpay-callback';
 
 export class CreateLiqPayDto {
   @IsOptional() @IsString() appointmentId?: string;
@@ -156,12 +161,11 @@ export class PaymentsService {
       throw new BadRequestException('Invalid signature');
     }
 
-    const payload = JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as {
-      order_id: string;
-      status: string;
-      payment_id?: string | number;
-      amount?: number;
-    };
+    const payload = JSON.parse(Buffer.from(data, 'base64').toString('utf8')) as LiqPayCallbackPayload;
+
+    if (!payload.order_id) {
+      throw new BadRequestException('Missing order_id');
+    }
 
     const payment = await this.prisma.onlinePayment.findUnique({
       where: { orderId: payload.order_id },
@@ -171,12 +175,30 @@ export class PaymentsService {
       return { ok: false };
     }
 
-    const successStatuses = ['success', 'sandbox', 'wait_accept'];
-    const status = successStatuses.includes(payload.status)
-      ? OnlinePaymentStatus.SUCCESS
-      : payload.status === 'failure' || payload.status === 'error'
-        ? OnlinePaymentStatus.FAILURE
-        : OnlinePaymentStatus.PENDING;
+    const sandboxAllowed =
+      process.env.LIQPAY_SANDBOX !== 'false' && (salon?.liqpaySandbox ?? true);
+    const decision = decideLiqPayCallback({
+      payload,
+      payment: {
+        amount: Number(payment.amount),
+        currency: payment.currency,
+        status: payment.status,
+      },
+      sandboxAllowed,
+    });
+
+    if (!decision.ok) {
+      this.logger.warn(
+        `LiqPay callback rejected order=${payload.order_id} reason=${decision.reason} payloadAmount=${payload.amount} expected=${payment.amount}`,
+      );
+      throw new BadRequestException(decision.reason);
+    }
+
+    if (decision.idempotent) {
+      return { ok: true, status: decision.status };
+    }
+
+    const status = decision.status;
 
     await this.prisma.onlinePayment.update({
       where: { id: payment.id },
@@ -229,13 +251,13 @@ export class PaymentsService {
     });
   }
 
-  /** Dev / sandbox: mark deposit paid without LiqPay */
+  /** Dev / test only: mark deposit paid without LiqPay. Never in production. */
   isMockDepositAllowed() {
-    return (
-      process.env.DEPOSIT_MOCK === 'true' ||
-      process.env.NODE_ENV !== 'production' ||
-      process.env.LIQPAY_SANDBOX === 'true'
-    );
+    return mockDepositAllowed({
+      NODE_ENV: process.env.NODE_ENV,
+      DEPOSIT_MOCK: process.env.DEPOSIT_MOCK,
+      LIQPAY_SANDBOX: process.env.LIQPAY_SANDBOX,
+    });
   }
 
   async mockDepositPay(appointmentId: string) {
