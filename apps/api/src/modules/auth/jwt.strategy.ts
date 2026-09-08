@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Request } from 'express';
 import { UsersService } from '../users/users.service';
+import { requireJwtSecret } from '../../common/utils/env-security';
 
 function cookieExtractor(req: Request): string | null {
   if (req?.cookies?.accessToken) return req.cookies.accessToken as string;
@@ -30,7 +31,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         ExtractJwt.fromAuthHeaderAsBearerToken(),
       ]),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>('JWT_ACCESS_SECRET') || 'dev-secret',
+      secretOrKey: requireJwtSecret(
+        'JWT_ACCESS_SECRET',
+        config.get<string>('JWT_ACCESS_SECRET'),
+        process.env.NODE_ENV,
+      ),
     });
   }
 

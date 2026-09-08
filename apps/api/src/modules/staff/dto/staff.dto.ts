@@ -32,6 +32,8 @@ export class CreateStaffDto {
   @IsOptional() @IsString() bio?: string;
   @IsOptional() @IsString() color?: string;
   @IsOptional() @IsNumber() commissionPct?: number;
+  @IsOptional() @IsNumber() productCommissionPct?: number;
+  @IsOptional() commissionTiers?: { minRevenue: number; pct: number }[];
   @IsOptional() @IsArray() @IsString({ each: true }) specializations?: string[];
   @IsOptional() @IsBoolean() isBookable?: boolean;
   @IsOptional() @IsArray() @IsString({ each: true }) serviceIds?: string[];
@@ -51,6 +53,8 @@ export class UpdateStaffDto {
   @IsOptional() @IsString() bio?: string;
   @IsOptional() @IsString() color?: string;
   @IsOptional() @IsNumber() commissionPct?: number;
+  @IsOptional() @IsNumber() productCommissionPct?: number;
+  @IsOptional() commissionTiers?: { minRevenue: number; pct: number }[];
   @IsOptional() @IsArray() @IsString({ each: true }) specializations?: string[];
   @IsOptional() @IsBoolean() isBookable?: boolean;
   @IsOptional() @IsBoolean() isActive?: boolean;

@@ -30,6 +30,8 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { PortalModule } from './modules/portal/portal.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
+import { FiscalModule } from './modules/fiscal/fiscal.module';
+import { TelegramModule } from './modules/telegram/telegram.module';
 import { HealthController } from './health.controller';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -66,6 +68,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     RoomsModule,
     PortalModule,
     PayrollModule,
+    FiscalModule,
+    TelegramModule,
   ],
   controllers: [HealthController],
   providers: [

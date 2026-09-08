@@ -15,8 +15,14 @@ export class SalonController {
   ) {}
 
   @Get()
+  @Roles(Role.OWNER, Role.ADMIN)
   get() {
     return this.salonService.get();
+  }
+
+  @Get('staff-config')
+  staffConfig() {
+    return this.salonService.getStaffConfig();
   }
 
   @Patch()

@@ -18,6 +18,8 @@ export default function ClientPortalPage() {
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState({ email: '', birthDate: '', notes: '' });
+  const [tg, setTg] = useState<{ url: string; enabled: boolean } | null>(null);
 
   useEffect(() => {
     const t = localStorage.getItem(TOKEN_KEY);
@@ -37,6 +39,13 @@ export default function ClientPortalPage() {
       ]);
       setClient(me);
       setAppts(list);
+      setProfile({
+        email: me.email || '',
+        birthDate: me.birthDate ? String(me.birthDate).slice(0, 10) : '',
+        notes: me.notes || me.preferences || '',
+      });
+      const link = await portalApi.telegramLink(t).catch(() => null);
+      if (link) setTg(link);
     } catch {
       localStorage.removeItem(TOKEN_KEY);
       setToken(null);
@@ -176,7 +185,7 @@ export default function ClientPortalPage() {
         ) : (
           <div className="space-y-6">
             {client ? (
-              <div className="card grid gap-3 p-5 sm:grid-cols-3">
+              <div className="card grid gap-3 p-5 sm:grid-cols-4">
                 <div>
                   <div className="text-xs text-ink-muted">Клієнт</div>
                   <div className="font-semibold">
@@ -193,6 +202,15 @@ export default function ClientPortalPage() {
                 <div>
                   <div className="text-xs text-ink-muted">Рівень</div>
                   <div className="font-semibold">{client.loyalty?.tier || 'BRONZE'}</div>
+                </div>
+                <div className="flex justify-center">
+                  <img
+                    alt="QR картки лояльності"
+                    className="h-20 w-20 rounded-lg bg-white p-1"
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(
+                      `MOB-LOYALTY:${client.id}`,
+                    )}`}
+                  />
                 </div>
               </div>
             ) : null}
@@ -243,15 +261,83 @@ export default function ClientPortalPage() {
               ) : (
                 <div className="max-h-80 space-y-2 overflow-auto">
                   {appts.past.slice(0, 20).map((a) => (
-                    <div key={a.id} className="flex justify-between border-b border-border py-2 text-sm">
+                    <div key={a.id} className="flex items-center justify-between gap-2 border-b border-border py-2 text-sm">
                       <span>
                         {formatDateTime(a.startAt)} · {a.staff?.displayName}
                       </span>
-                      <span className="text-ink-muted">{statusLabels[a.status] || a.status}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-ink-muted">{statusLabels[a.status] || a.status}</span>
+                        {a.status === 'COMPLETED' ? (
+                          <Link
+                            className="btn btn-secondary px-2 py-1 text-xs"
+                            href={`/book?rebook=1&staff=${a.staffId || a.staff?.id || ''}&services=${(a.services || [])
+                              .map((s: any) => s.serviceId)
+                              .filter(Boolean)
+                              .join(',')}`}
+                          >
+                            Повторити запис
+                          </Link>
+                        ) : null}
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
+            </section>
+
+            <section className="card space-y-3 p-5">
+              <h2 className="font-semibold">Профіль і вподобання</h2>
+              <Field label="Email">
+                <input
+                  className="input"
+                  type="email"
+                  value={profile.email}
+                  onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+                />
+              </Field>
+              <Field label="Дата народження">
+                <input
+                  className="input"
+                  type="date"
+                  value={profile.birthDate}
+                  onChange={(e) => setProfile({ ...profile, birthDate: e.target.value })}
+                />
+              </Field>
+              <Field label="Нотатки / побажання">
+                <textarea
+                  className="input min-h-16"
+                  value={profile.notes}
+                  onChange={(e) => setProfile({ ...profile, notes: e.target.value })}
+                />
+              </Field>
+              <button
+                className="btn btn-secondary"
+                disabled={!token || loading}
+                onClick={async () => {
+                  if (!token) return;
+                  setLoading(true);
+                  setError(null);
+                  try {
+                    const me = await portalApi.profile(token, {
+                      email: profile.email,
+                      birthDate: profile.birthDate || undefined,
+                      preferences: profile.notes,
+                    });
+                    setClient(me);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : 'Помилка');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                Зберегти профіль
+              </button>
+              {tg?.url ? (
+                <a className="btn btn-primary w-full" href={tg.url} target="_blank" rel="noreferrer">
+                  Підключити Telegram
+                </a>
+              ) : null}
             </section>
 
             <Link href="/book" className="btn btn-primary w-full">

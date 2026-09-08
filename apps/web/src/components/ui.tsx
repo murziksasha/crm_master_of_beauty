@@ -43,7 +43,7 @@ export function Modal({
       <div className="absolute inset-0 bg-ink/40 backdrop-blur-[2px]" onClick={onClose} />
       <div
         className={cn(
-          'relative max-h-[90vh] w-full overflow-auto rounded-2xl bg-white p-5 shadow-xl',
+          'relative max-h-[90vh] w-full overflow-auto rounded-2xl bg-card p-5 shadow-xl',
           wide ? 'max-w-3xl' : 'max-w-lg',
         )}
       >
@@ -115,5 +115,38 @@ export function Field({
 
 export function ErrorText({ error }: { error?: string | null }) {
   if (!error) return null;
-  return <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>;
+  return (
+    <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-soft dark:text-rose">
+      {error}
+    </div>
+  );
+}
+
+export function BottomSheet({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-ink/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative max-h-[88vh] w-full overflow-auto rounded-t-2xl bg-card p-5 shadow-xl sm:max-w-lg sm:rounded-2xl">
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-border sm:hidden" />
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold text-ink">{title}</h2>
+          <button className="btn btn-ghost p-2" onClick={onClose} aria-label="Закрити">
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }

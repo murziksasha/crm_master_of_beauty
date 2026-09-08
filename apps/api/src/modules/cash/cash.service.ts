@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AppointmentStatus,
@@ -15,12 +16,19 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateSaleDto, SaleQueryDto } from './dto/cash.dto';
+import {
+  bomRestoreLines,
+  giftBalanceAfterRefund,
+  packageSessionsAfterRefund,
+} from '../../common/utils/refund-rollback';
+import { FiscalService } from '../fiscal/fiscal.service';
 
 @Injectable()
 export class CashService {
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
+    @Optional() private fiscal?: FiscalService,
   ) {}
 
   async list(query: SaleQueryDto) {
@@ -146,6 +154,7 @@ export class CashService {
         cashier: { select: { firstName: true, lastName: true, email: true } },
         items: true,
         appointment: { include: { staff: true } },
+        fiscalReceipts: true,
       },
     });
     if (!sale) throw new NotFoundException('Чек не знайдено');
@@ -278,6 +287,7 @@ export class CashService {
 
       let giftRedeem = 0;
       let giftNote = '';
+      let giftCertificateId: string | undefined;
       if (dto.giftCode) {
         const code = dto.giftCode.trim().toUpperCase();
         const gift = await tx.giftCertificate.findUnique({ where: { code } });
@@ -288,6 +298,7 @@ export class CashService {
         const payable = Math.max(0, subtotal - effectiveDiscount - loyaltyRedeem);
         giftRedeem = Math.min(Number(gift.balance), payable);
         if (giftRedeem <= 0) throw new BadRequestException('На сертифікаті немає залишку');
+        giftCertificateId = gift.id;
         await tx.giftCertificate.update({
           where: { id: gift.id },
           data: {
@@ -300,6 +311,15 @@ export class CashService {
       }
 
       const total = Math.max(0, subtotal - effectiveDiscount - loyaltyRedeem - giftRedeem);
+      if (dto.method === 'MIXED') {
+        const cash = Number(dto.cashAmount || 0);
+        const card = Number(dto.cardAmount || 0);
+        if (Math.abs(cash + card - total) > 0.05) {
+          throw new BadRequestException(
+            `Спліт-оплата має дорівнювати сумі чека (${total} ₴)`,
+          );
+        }
+      }
       const notes =
         [dto.notes, packageNote, depositNote, giftNote].filter(Boolean).join(' · ') || undefined;
 
@@ -315,6 +335,10 @@ export class CashService {
           subtotal,
           discountAmount: effectiveDiscount + giftRedeem,
           loyaltyRedeem,
+          giftRedeem,
+          giftCertificateId,
+          packageId: dto.packageId || undefined,
+          packageSessionsBurned: sessionsBurned,
           total,
           method: dto.method,
           cashAmount: dto.cashAmount,
@@ -449,6 +473,8 @@ export class CashService {
         summary: `Чек ${sale.number} на ${Number(sale.total)}`,
       });
 
+      void this.fiscal?.onSalePaid(sale.id);
+
       return sale;
     });
   }
@@ -478,6 +504,81 @@ export class CashService {
               reason: `Сторно ${sale.number}`,
               userId,
             },
+          });
+        }
+      }
+
+      const serviceIds = sale.items
+        .filter((i) => i.type === SaleItemType.SERVICE && i.refId)
+        .map((i) => i.refId!) ;
+      if (serviceIds.length) {
+        const recipes = await tx.serviceMaterial.findMany({
+          where: { serviceId: { in: serviceIds } },
+          include: { product: true },
+        });
+        const restore = bomRestoreLines(
+          sale.items.map((i) => ({
+            type: i.type,
+            refId: i.refId,
+            name: i.name,
+            qty: Number(i.qty),
+          })),
+          recipes.map((r) => ({
+            serviceId: r.serviceId,
+            productId: r.productId,
+            productName: r.product.name,
+            qty: Number(r.qty),
+          })),
+        );
+        for (const line of restore) {
+          await tx.product.update({
+            where: { id: line.productId },
+            data: { stockQty: { increment: line.qty } },
+          });
+          await tx.stockMovement.create({
+            data: {
+              productId: line.productId,
+              type: StockMovementType.IN,
+              qty: line.qty,
+              reason: `Сторно рецепту ${sale.number} · ${line.productName}`,
+              userId,
+            },
+          });
+        }
+      }
+
+      if (sale.packageId && sale.packageSessionsBurned > 0) {
+        const pkg = await tx.clientPackage.findUnique({ where: { id: sale.packageId } });
+        if (pkg) {
+          const next = packageSessionsAfterRefund(
+            pkg.sessionsLeft,
+            pkg.sessionsTotal,
+            sale.packageSessionsBurned,
+          );
+          await tx.clientPackage.update({
+            where: { id: pkg.id },
+            data: {
+              sessionsLeft: next.sessionsLeft,
+              status: next.status as 'ACTIVE' | 'EXHAUSTED',
+            },
+          });
+        }
+      }
+
+      const giftAmount = Number(sale.giftRedeem || 0);
+      if (sale.giftCertificateId && giftAmount > 0) {
+        const gift = await tx.giftCertificate.findUnique({
+          where: { id: sale.giftCertificateId },
+        });
+        if (gift) {
+          const next = giftBalanceAfterRefund(
+            Number(gift.balance),
+            giftAmount,
+            Number(gift.initial),
+          );
+          await tx.giftCertificate.update({
+            where: { id: gift.id },
+            data: { balance: next.balance, isActive: next.isActive },
           });
         }
       }
@@ -550,6 +651,8 @@ export class CashService {
         entityId: saleId,
         summary: `Сторно ${sale.number}: ${reason || ''}`,
       });
+
+      void this.fiscal?.onSaleRefund(saleId);
 
       return refunded;
     });

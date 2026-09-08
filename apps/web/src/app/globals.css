@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-cream: #faf7f5;
   --color-cream-dark: #f3ebe6;
@@ -27,6 +29,49 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   min-height: 100%;
+}
+
+.dark {
+  --color-cream: #1c1816;
+  --color-cream-dark: #2a2421;
+  --color-rose: #e09a9c;
+  --color-rose-dark: #c4787a;
+  --color-rose-soft: #3a2a2b;
+  --color-gold: #d4b896;
+  --color-gold-soft: #3a3228;
+  --color-ink: #f4ece6;
+  --color-ink-muted: #b7aaa3;
+  --color-card: #241f1c;
+  --color-border: #3d342f;
+}
+
+.dark body {
+  background: var(--color-cream);
+  color: var(--color-ink);
+}
+
+.dark .input {
+  background: #1a1614;
+  color: var(--color-ink);
+  border-color: var(--color-border);
+}
+
+.dark .table th {
+  background: var(--color-cream-dark);
+}
+
+.dark .table tr:hover td {
+  background: #2e2824;
+}
+
+.dark .btn-secondary {
+  background: var(--color-cream-dark);
+  color: var(--color-ink);
+}
+
+.dark .btn-danger {
+  background: #3a2020;
+  color: #f2b4b0;
 }
 
 a {
@@ -165,13 +210,20 @@ textarea {
   .print-receipt * {
     visibility: visible;
   }
+  @page {
+    size: 80mm auto;
+    margin: 4mm;
+  }
   .print-receipt {
     position: absolute;
     left: 0;
     top: 0;
-    width: 100%;
+    width: 80mm;
     background: white;
-    padding: 24px;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #000;
   }
   .no-print {
     display: none !important;

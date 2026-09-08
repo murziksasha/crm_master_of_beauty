@@ -33,8 +33,26 @@ export class PublicBookingController {
     @Query('staffId') staffId: string,
     @Query('date') date: string,
     @Query('serviceIds') serviceIds = '',
+    @Query('branchId') branchId?: string,
   ) {
-    return this.publicBookingService.getSlots(staffId, date, serviceIds);
+    return this.publicBookingService.getSlots(staffId, date, serviceIds, branchId);
+  }
+
+  @Get('availability')
+  availability(
+    @Query('from') from: string,
+    @Query('serviceIds') serviceIds = '',
+    @Query('staffId') staffId?: string,
+    @Query('days') days?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.publicBookingService.getAvailability({
+      from,
+      serviceIds,
+      staffId,
+      days: Number(days) || 14,
+      branchId,
+    });
   }
 
   @Get('rooms')

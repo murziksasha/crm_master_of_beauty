@@ -11,8 +11,11 @@ import { Throttle } from '@nestjs/throttler';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { Public } from '../../common/decorators/public.decorator';
+import { requireJwtSecret } from '../../common/utils/env-security';
 import {
   PortalCancelDto,
+  PortalNpsDto,
+  PortalProfileDto,
   PortalRequestDto,
   PortalService,
   PortalVerifyDto,
@@ -33,7 +36,11 @@ export class PortalController {
     const token = auth.slice(7);
     try {
       const payload = await this.jwt.verifyAsync<{ sub: string; typ?: string }>(token, {
-        secret: this.config.get('JWT_ACCESS_SECRET') || 'dev-secret',
+        secret: requireJwtSecret(
+          'JWT_ACCESS_SECRET',
+          this.config.get('JWT_ACCESS_SECRET'),
+          process.env.NODE_ENV,
+        ),
       });
       if (payload.typ !== 'portal') throw new UnauthorizedException();
       return payload.sub;
@@ -73,5 +80,29 @@ export class PortalController {
   ) {
     const clientId = await this.clientIdFromAuth(auth);
     return this.portal.cancel(clientId, dto);
+  }
+
+  @Post('profile')
+  async profile(
+    @Headers('authorization') auth: string | undefined,
+    @Body() dto: PortalProfileDto,
+  ) {
+    const clientId = await this.clientIdFromAuth(auth);
+    return this.portal.updateProfile(clientId, dto);
+  }
+
+  @Post('nps')
+  async nps(
+    @Headers('authorization') auth: string | undefined,
+    @Body() dto: PortalNpsDto,
+  ) {
+    const clientId = await this.clientIdFromAuth(auth);
+    return this.portal.submitNps(clientId, dto);
+  }
+
+  @Get('telegram-link')
+  async telegramLink(@Headers('authorization') auth?: string) {
+    const clientId = await this.clientIdFromAuth(auth);
+    return this.portal.telegramLink(clientId);
   }
 }

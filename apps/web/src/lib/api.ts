@@ -133,12 +133,35 @@ export const publicApi = {
     const qs = q.toString();
     return api<any[]>(`/public/staff${qs ? `?${qs}` : ''}`, {}, false);
   },
-  slots: (staffId: string, date: string, serviceIds: string) =>
-    api<{ slots: string[]; durationMin: number }>(
-      `/public/slots?staffId=${staffId}&date=${date}&serviceIds=${serviceIds}`,
+  slots: (staffId: string, date: string, serviceIds: string, branchId?: string) => {
+    const q = new URLSearchParams({ staffId, date, serviceIds });
+    if (branchId) q.set('branchId', branchId);
+    return api<{
+      slots: string[];
+      durationMin: number;
+      options?: { at: string; staffId: string; displayName: string }[];
+    }>(`/public/slots?${q.toString()}`, {}, false);
+  },
+  availability: (params: {
+    from: string;
+    serviceIds: string;
+    staffId?: string;
+    days?: number;
+    branchId?: string;
+  }) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      serviceIds: params.serviceIds,
+    });
+    if (params.staffId) q.set('staffId', params.staffId);
+    if (params.days) q.set('days', String(params.days));
+    if (params.branchId) q.set('branchId', params.branchId);
+    return api<{ days: { date: string; slotsCount: number; full: boolean }[] }>(
+      `/public/availability?${q.toString()}`,
       {},
       false,
-    ),
+    );
+  },
   book: (body: unknown) =>
     api('/public/bookings', { method: 'POST', body: JSON.stringify(body) }, false),
   waitlist: (body: unknown) =>
@@ -149,11 +172,6 @@ export const publicApi = {
       {},
       false,
     ),
-  mockDeposit: (appointmentId: string) =>
-    api('/payments/mock-deposit/public', {
-      method: 'POST',
-      body: JSON.stringify({ appointmentId }),
-    }, false),
 };
 
 export const portalApi = {
@@ -200,5 +218,42 @@ export const portalApi = {
         throw new Error(err.message || 'Не вдалося скасувати');
       }
       return r.json();
+    }),
+  profile: (token: string, body: unknown) =>
+    fetch(`${getApiBase()}/public/portal/profile`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    }).then(async (r) => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || 'Не вдалося зберегти профіль');
+      }
+      return r.json();
+    }),
+  nps: (token: string, appointmentId: string, score: number) =>
+    fetch(`${getApiBase()}/public/portal/nps`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ appointmentId, score }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error('Не вдалося надіслати оцінку');
+      return r.json();
+    }),
+  telegramLink: (token: string) =>
+    fetch(`${getApiBase()}/public/portal/telegram-link`, {
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
+    }).then(async (r) => {
+      if (!r.ok) return { url: '', enabled: false };
+      return r.json() as Promise<{ url: string; enabled: boolean }>;
     }),
 };

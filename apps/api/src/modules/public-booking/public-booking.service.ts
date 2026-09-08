@@ -11,7 +11,7 @@ export class PublicBookDto {
   @IsOptional() @IsString() lastName?: string;
   @IsString() @MinLength(9) phone!: string;
   @IsOptional() @IsString() email?: string;
-  @IsString() staffId!: string;
+  @IsOptional() @IsString() staffId?: string;
   @IsString() startAt!: string;
   @IsArray() @IsString({ each: true }) serviceIds!: string[];
   @IsOptional() @IsString() notes?: string;
@@ -45,10 +45,7 @@ export class PublicBookingService {
       depositEnabled: salon.depositEnabled,
       depositRequired: salon.depositRequired,
       depositPercent: salon.depositPercent,
-      mockDepositAllowed:
-        process.env.DEPOSIT_MOCK === 'true' ||
-        process.env.NODE_ENV !== 'production' ||
-        process.env.LIQPAY_SANDBOX === 'true',
+      mockDepositAllowed: this.payments.isMockDepositAllowed(),
       branches: salon.branches.map((b) => ({
         id: b.id,
         name: b.name,
@@ -96,8 +93,25 @@ export class PublicBookingService {
     });
   }
 
-  getSlots(staffId: string, date: string, serviceIds: string) {
+  getSlots(staffId: string, date: string, serviceIds: string, branchId?: string) {
+    if (!staffId || staffId === 'any') {
+      return this.appointmentsService.getAnyStaffSlots({
+        date,
+        serviceIds,
+        branchId,
+      });
+    }
     return this.appointmentsService.getSlots({ staffId, date, serviceIds });
+  }
+
+  getAvailability(params: {
+    from: string;
+    days?: number;
+    serviceIds: string;
+    staffId?: string;
+    branchId?: string;
+  }) {
+    return this.appointmentsService.getAvailability(params);
   }
 
   async book(dto: PublicBookDto) {
@@ -140,9 +154,19 @@ export class PublicBookingService {
       }
     }
 
+    let staffId = dto.staffId && dto.staffId !== 'any' ? dto.staffId : '';
+    if (!staffId) {
+      const picked = await this.appointmentsService.pickStaffForSlot({
+        startAt: dto.startAt,
+        serviceIds: dto.serviceIds,
+        branchId: dto.branchId,
+      });
+      staffId = picked.staffId;
+    }
+
     const appointment = await this.appointmentsService.create({
       clientId: client.id,
-      staffId: dto.staffId,
+      staffId,
       startAt: dto.startAt,
       serviceIds: dto.serviceIds,
       source: AppointmentSource.ONLINE,

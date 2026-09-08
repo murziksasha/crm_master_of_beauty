@@ -35,10 +35,11 @@ export class AppointmentQueryDto {
 }
 
 export class SlotsQueryDto {
-  @IsString() staffId!: string;
+  @IsOptional() @IsString() staffId?: string;
   @IsString() date!: string;
   @IsOptional() @IsString() serviceIds?: string;
   @IsOptional() durationMin?: number;
+  @IsOptional() @IsString() branchId?: string;
 }
 
 export class UpdateStatusDto {

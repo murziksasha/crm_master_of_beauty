@@ -5,13 +5,24 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomInt } from 'crypto';
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { AppointmentStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AppointmentsService } from '../appointments/appointments.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { RedisService } from '../../redis/redis.service';
+import { requireJwtSecret } from '../../common/utils/env-security';
+import {
+  isOtpRateLimited,
+  OTP_MAX_ATTEMPTS,
+  OTP_REQUEST_MAX,
+  OTP_REQUEST_WINDOW_SEC,
+  OTP_TTL_MS,
+  otpRequestKey,
+  portalDevCodeAllowed,
+} from '../../common/utils/otp-policy';
 
 export class PortalRequestDto {
   @IsString() @MinLength(9) phone!: string;
@@ -27,6 +38,18 @@ export class PortalCancelDto {
   @IsOptional() @IsString() reason?: string;
 }
 
+export class PortalProfileDto {
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() @IsString() birthDate?: string;
+  @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsString() preferences?: string;
+}
+
+export class PortalNpsDto {
+  @IsString() appointmentId!: string;
+  @IsNumber() @Min(1) @Max(10) score!: number;
+}
+
 @Injectable()
 export class PortalService {
   constructor(
@@ -35,7 +58,16 @@ export class PortalService {
     private appointmentsService: AppointmentsService,
     private jwt: JwtService,
     private config: ConfigService,
+    private redis: RedisService,
   ) {}
+
+  private jwtSecret() {
+    return requireJwtSecret(
+      'JWT_ACCESS_SECRET',
+      this.config.get('JWT_ACCESS_SECRET'),
+      process.env.NODE_ENV,
+    );
+  }
 
   private normalizePhone(phone: string) {
     const digits = phone.replace(/[^\d+]/g, '');
@@ -50,6 +82,25 @@ export class PortalService {
 
   async requestCode(dto: PortalRequestDto) {
     const phone = this.normalizePhone(dto.phone);
+
+    const redisCount = await this.redis.incr(otpRequestKey(phone), OTP_REQUEST_WINDOW_SEC);
+    if (redisCount && isOtpRateLimited(redisCount, OTP_REQUEST_MAX)) {
+      throw new BadRequestException('Забагато запитів коду. Спробуйте через 15 хвилин.');
+    }
+    if (!redisCount) {
+      const recent = await this.prisma.clientPortalOtp.count({
+        where: {
+          createdAt: { gte: new Date(Date.now() - OTP_REQUEST_WINDOW_SEC * 1000) },
+          client: {
+            OR: [{ phone }, { phone: { endsWith: phone.slice(-9) } }],
+          },
+        },
+      });
+      if (isOtpRateLimited(recent + 1, OTP_REQUEST_MAX)) {
+        throw new BadRequestException('Забагато запитів коду. Спробуйте через 15 хвилин.');
+      }
+    }
+
     const client = await this.prisma.client.findFirst({
       where: {
         deletedAt: null,
@@ -65,12 +116,13 @@ export class PortalService {
     }
 
     const code = String(randomInt(100000, 999999));
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
     await this.prisma.clientPortalOtp.create({
       data: {
         clientId: client.id,
         codeHash: this.hash(code),
         expiresAt,
+        attempts: 0,
       },
     });
 
@@ -81,10 +133,12 @@ export class PortalService {
       meta: { type: 'portal_otp', clientId: client.id },
     });
 
-    const devCode =
-      process.env.NODE_ENV !== 'production' || process.env.PORTAL_DEV_CODE === 'true'
-        ? code
-        : undefined;
+    const devCode = portalDevCodeAllowed({
+      NODE_ENV: process.env.NODE_ENV,
+      PORTAL_DEV_CODE: process.env.PORTAL_DEV_CODE,
+    })
+      ? code
+      : undefined;
 
     return {
       ok: true,
@@ -112,7 +166,28 @@ export class PortalService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (!otp || otp.codeHash !== this.hash(dto.code.trim())) {
+    if (!otp) {
+      throw new UnauthorizedException('Невірний або прострочений код');
+    }
+    if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+      await this.prisma.clientPortalOtp.update({
+        where: { id: otp.id },
+        data: { usedAt: new Date() },
+      });
+      throw new UnauthorizedException('Код заблоковано після 5 невдалих спроб');
+    }
+    if (otp.codeHash !== this.hash(dto.code.trim())) {
+      const attempts = otp.attempts + 1;
+      await this.prisma.clientPortalOtp.update({
+        where: { id: otp.id },
+        data: {
+          attempts,
+          usedAt: attempts >= OTP_MAX_ATTEMPTS ? new Date() : undefined,
+        },
+      });
+      if (attempts >= OTP_MAX_ATTEMPTS) {
+        throw new UnauthorizedException('Код заблоковано після 5 невдалих спроб');
+      }
       throw new UnauthorizedException('Невірний або прострочений код');
     }
 
@@ -124,7 +199,7 @@ export class PortalService {
     const token = await this.jwt.signAsync(
       { sub: client.id, typ: 'portal' },
       {
-        secret: this.config.get('JWT_ACCESS_SECRET') || 'dev-secret',
+        secret: this.jwtSecret(),
         expiresIn: '7d',
       },
     );
@@ -156,7 +231,7 @@ export class PortalService {
     const items = await this.prisma.appointment.findMany({
       where: { clientId },
       include: {
-        staff: { select: { displayName: true, color: true } },
+        staff: { select: { id: true, displayName: true, color: true } },
         services: true,
         room: { select: { name: true } },
         sale: { select: { id: true, total: true, number: true } },
@@ -201,5 +276,47 @@ export class PortalService {
       },
     });
     return this.appointmentsService.updateStatus(appt.id, AppointmentStatus.CANCELLED);
+  }
+
+  async updateProfile(clientId: string, dto: PortalProfileDto) {
+    const data: Record<string, unknown> = {};
+    if (dto.email !== undefined) data.email = dto.email || null;
+    if (dto.notes !== undefined) data.notes = dto.notes;
+    if (dto.preferences !== undefined) data.preferences = dto.preferences;
+    if (dto.birthDate) {
+      const d = new Date(dto.birthDate);
+      if (!Number.isNaN(d.getTime())) data.birthDate = d;
+    }
+    return this.prisma.client.update({
+      where: { id: clientId },
+      data: data as never,
+      include: { loyalty: true, packages: { where: { status: 'ACTIVE' } } },
+    });
+  }
+
+  async submitNps(clientId: string, dto: PortalNpsDto) {
+    const score = Number(dto.score);
+    if (!Number.isFinite(score) || score < 1 || score > 10) {
+      throw new BadRequestException('Оцінка має бути від 1 до 10');
+    }
+    const appt = await this.prisma.appointment.findFirst({
+      where: { id: dto.appointmentId, clientId },
+    });
+    if (!appt) throw new NotFoundException('Запис не знайдено');
+    return this.prisma.appointment.update({
+      where: { id: appt.id },
+      data: { npsScore: Math.round(score) },
+      select: { id: true, npsScore: true },
+    });
+  }
+
+  async telegramLink(clientId: string) {
+    const salon = await this.prisma.salon.findFirst();
+    const token = process.env.TELEGRAM_BOT_TOKEN || salon?.telegramBotToken || '';
+    const username = process.env.TELEGRAM_BOT_USERNAME || 'masterofbeauty_bot';
+    return {
+      url: `https://t.me/${username}?start=c_${clientId}`,
+      enabled: !!token || !!salon?.telegramEnabled,
+    };
   }
 }
